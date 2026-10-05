@@ -37,6 +37,39 @@ docker compose exec api npm run db:seed   # cria o usuário admin
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
 
+## Produção
+
+```bash
+cp .env.prod.example .env.prod      # e troque todos os segredos
+docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+docker compose -f compose.prod.yaml --env-file .env.prod run --rm migrate npx prisma db seed
+```
+
+O [compose.prod.yaml](compose.prod.yaml) é independente do de dev (tem outro nome de projeto), então os dois podem rodar ao mesmo tempo.
+
+| | Dev (`compose.yaml`) | Produção (`compose.prod.yaml`) |
+|---|---|---|
+| Imagens | estágio `dev`, hot reload | estágio `prod`: sem devDependencies, sem root |
+| Portas publicadas | todas (para depurar) | **só o Nginx** |
+| Migrations | ao subir a API | serviço `migrate`, que roda e termina antes da API subir |
+| Sistema de arquivos | gravável | **somente leitura** (só `/tmp` em memória) |
+| Capabilities do Linux | padrão | **nenhuma** (`cap_drop: ALL`, `no-new-privileges`) |
+| Rede | uma só | `backend` **interna, sem internet**; só o worker tem saída (SMTP) |
+| Recursos | sem limite | limite de CPU e memória por serviço |
+| Logs | sem limite | rotação (3 arquivos de 10MB) |
+| Variáveis | com valores padrão | obrigatórias: se faltar alguma, o compose não sobe |
+
+Verificado:
+- Os testes de autenticação passam pelo Nginx de produção.
+- Os containers da aplicação rodam como `node`, com capabilities zeradas, e recusam gravação em `/app`.
+- A API não alcança a internet; o worker alcança.
+- O cookie de sessão sai com `HttpOnly; Secure; SameSite=Strict`.
+- Os dados sobrevivem a `down`/`up`, e o `migrate` da segunda subida não reaplica nada.
+
+Uso de memória em repouso: API ~80MB, worker ~45MB, web ~40MB, Postgres ~40MB, Nginx ~10MB, Redis ~6MB.
+
+Para colocar na internet de verdade, falta o HTTPS: um proxy com certificado automático (Caddy, Traefik) ou o balanceador do provedor de nuvem na frente do Nginx.
+
 ## Nginx (proxy reverso)
 
 Porta única de entrada: `/` vai para o Next.js, e `/api/*` vai para a API (sem o prefixo). Para o navegador, tudo é um site só. Configuração em [nginx/default.conf](nginx/default.conf).
@@ -151,4 +184,4 @@ Os e-mails de dev aparecem no Mailpit: http://localhost:8025
 - [x] Worker: fila de e-mails com BullMQ (boas-vindas, redefinição de senha, aviso de senha alterada)
 - [x] Web: Next.js + Tailwind + shadcn/ui (login, cadastro, senha, tarefas, admin)
 - [x] Nginx como reverse proxy (porta única, DNS dinâmico, IP real do cliente, gzip)
-- [ ] Compose de produção (imagens prod + Nginx)
+- [x] Compose de produção (só o Nginx exposto, containers endurecidos, migrations em serviço próprio)

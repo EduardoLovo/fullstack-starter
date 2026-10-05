@@ -42,9 +42,11 @@ CMD ["sh", "-c", "npx prisma migrate deploy && exec ./node_modules/.bin/tsx watc
 
 
 # ---- Migrations (serviço que roda uma vez e termina) ----
+# Também roda o seed do admin:  docker compose run --rm migrate npx prisma db seed
 FROM deps AS migrate
 COPY prisma ./prisma
 COPY prisma.config.ts ./
+RUN npx prisma generate
 CMD ["npx", "prisma", "migrate", "deploy"]
 
 
