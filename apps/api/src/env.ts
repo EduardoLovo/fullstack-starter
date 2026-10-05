@@ -13,6 +13,10 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, "JWT_SECRET precisa ter pelo menos 32 caracteres"),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+
+  // Endereço do frontend: usado para montar o link do e-mail de redefinição de senha.
+  APP_URL: z.url().default("http://localhost:3000"),
 
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   COOKIE_SECURE: z.stringbool().default(false),

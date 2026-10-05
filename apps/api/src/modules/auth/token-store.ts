@@ -59,3 +59,37 @@ export async function revokeAccessToken(jti: string, expiresAtEpochSeconds: numb
     await redis.set(keys.revokedAccessToken(jti), "1", "EX", ttl);
   }
 }
+
+// Tokens de redefinição de senha: mesma ideia do refresh token (aleatório,
+// só o hash no Redis, uso único), mas com validade curta.
+//
+//   pwreset:<hash>         -> userId
+//   pwreset-user:<userId>  -> hash do pedido mais recente
+//
+// Pedir um link novo invalida o anterior: só o último e-mail funciona.
+const RESET_TTL_SECONDS = env.PASSWORD_RESET_TTL_MINUTES * 60;
+
+export async function createPasswordResetToken(userId: string) {
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
+
+  const previousHash = await redis.get(keys.userPasswordReset(userId));
+  const pipeline = redis.multi();
+  if (previousHash) {
+    pipeline.del(keys.passwordReset(previousHash));
+  }
+  await pipeline
+    .set(keys.passwordReset(tokenHash), userId, "EX", RESET_TTL_SECONDS)
+    .set(keys.userPasswordReset(userId), tokenHash, "EX", RESET_TTL_SECONDS)
+    .exec();
+
+  return token;
+}
+
+export async function consumePasswordResetToken(token: string) {
+  const userId = await redis.getdel(keys.passwordReset(hashToken(token)));
+  if (userId) {
+    await redis.del(keys.userPasswordReset(userId));
+  }
+  return userId;
+}

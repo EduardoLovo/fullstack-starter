@@ -17,4 +17,6 @@ export const keys = {
   refreshToken: (tokenHash: string) => `refresh:${tokenHash}`,
   userSessions: (userId: string) => `sessions:${userId}`,
   revokedAccessToken: (jti: string) => `denylist:${jti}`,
+  passwordReset: (tokenHash: string) => `pwreset:${tokenHash}`,
+  userPasswordReset: (userId: string) => `pwreset-user:${userId}`,
 };

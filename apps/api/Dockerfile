@@ -35,7 +35,10 @@ FROM deps AS dev
 COPY . .
 RUN npx prisma generate
 EXPOSE 3333
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run dev"]
+# `exec` faz o tsx substituir o shell e virar o processo principal: assim ele
+# recebe o SIGTERM do `docker stop` e o desligamento gracioso funciona.
+# (Com `npm run dev`, o npm fica no meio e não repassa o sinal direito.)
+CMD ["sh", "-c", "npx prisma migrate deploy && exec ./node_modules/.bin/tsx watch src/server.ts"]
 
 
 # ---- Migrations (serviço que roda uma vez e termina) ----

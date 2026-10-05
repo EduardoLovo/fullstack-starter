@@ -2,6 +2,7 @@ import { buildApp } from "./app.js";
 import { env } from "./env.js";
 import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
+import { emailQueue } from "./queues/email.queue.js";
 
 const app = await buildApp();
 
@@ -11,6 +12,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
     app.log.info(`${signal} recebido, encerrando...`);
     await app.close();
+    await emailQueue.close();
     await prisma.$disconnect();
     redis.disconnect();
     process.exit(0);

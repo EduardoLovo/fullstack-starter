@@ -5,12 +5,22 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { env } from "../../env.js";
 import { prisma } from "../../lib/prisma.js";
+import { enqueueEmail } from "../../queues/email.queue.js";
 import { publicUserSelect } from "../users/users.schemas.js";
-import { authResponseSchema, loginBodySchema, registerBodySchema } from "./auth.schemas.js";
 import {
+  authResponseSchema,
+  forgotPasswordBodySchema,
+  loginBodySchema,
+  registerBodySchema,
+  resetPasswordBodySchema,
+} from "./auth.schemas.js";
+import {
+  consumePasswordResetToken,
   consumeRefreshToken,
+  createPasswordResetToken,
   createRefreshToken,
   revokeAccessToken,
+  revokeAllSessions,
   revokeRefreshToken,
 } from "./token-store.js";
 
@@ -57,6 +67,11 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { name, email, passwordHash: await argon2.hash(password) },
         select: publicUserSelect,
       });
+
+      // Se a fila falhar, o cadastro não deve falhar junto: só registra o erro.
+      await enqueueEmail({ template: "welcome", to: user.email, name: user.name }).catch((error) =>
+        request.log.error({ error }, "Não foi possível enfileirar o e-mail de boas-vindas"),
+      );
 
       const accessToken = await issueSession(reply, user);
       return reply.status(201).send({ accessToken, user });
@@ -122,6 +137,88 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const accessToken = await issueSession(reply, user);
       return { accessToken, user };
+    },
+  );
+
+  app.post(
+    "/forgot-password",
+    {
+      config: { rateLimit: { max: 3, timeWindow: "1 minute" } },
+      schema: {
+        tags: ["auth"],
+        body: forgotPasswordBodySchema,
+        response: { 202: z.object({ message: z.string() }) },
+      },
+    },
+    async (request, reply) => {
+      const { email } = request.body;
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, name: true, email: true, status: true },
+      });
+
+      if (user && user.status === "ACTIVE") {
+        try {
+          const token = await createPasswordResetToken(user.id);
+          const resetUrl = new URL("/reset-password", env.APP_URL);
+          resetUrl.searchParams.set("token", token);
+
+          await enqueueEmail({
+            template: "password-reset",
+            to: user.email,
+            name: user.name,
+            resetUrl: resetUrl.toString(),
+            expiresInMinutes: env.PASSWORD_RESET_TTL_MINUTES,
+          });
+        } catch (error) {
+          // Não devolve 500 aqui: um erro que só acontece para e-mails
+          // cadastrados revelaria quem tem conta.
+          request.log.error({ error }, "Não foi possível gerar o link de redefinição");
+        }
+      }
+
+      // Mesma resposta exista o e-mail ou não: a rota não pode servir para
+      // descobrir quem tem conta. 202 = "aceito, vai ser processado".
+      return reply.status(202).send({
+        message: "Se o e-mail estiver cadastrado, você vai receber um link para redefinir a senha.",
+      });
+    },
+  );
+
+  app.post(
+    "/reset-password",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+      schema: {
+        tags: ["auth"],
+        body: resetPasswordBodySchema,
+        response: { 204: z.null() },
+      },
+    },
+    async (request, reply) => {
+      const { token, password } = request.body;
+
+      const userId = await consumePasswordResetToken(token);
+      if (!userId) {
+        throw app.httpErrors.badRequest("Link inválido ou expirado, peça um novo");
+      }
+
+      const user = await prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash: await argon2.hash(password) },
+        select: { id: true, name: true, email: true },
+      });
+
+      // Senha nova = todas as sessões antigas caem (inclusive a de quem
+      // eventualmente roubou a senha anterior).
+      await revokeAllSessions(user.id);
+
+      await enqueueEmail({ template: "password-changed", to: user.email, name: user.name }).catch(
+        (error) => request.log.error({ error }, "Não foi possível enfileirar o aviso de senha alterada"),
+      );
+
+      return reply.status(204).send(null);
     },
   );
 
