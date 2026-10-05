@@ -19,6 +19,9 @@ const envSchema = z.object({
   APP_URL: z.url().default("http://localhost:3000"),
 
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  // Nomes dos serviços que são proxies confiáveis (ex.: "nginx,web").
+  // Vazio = não confia em ninguém e usa o IP da conexão.
+  TRUSTED_PROXY_HOSTS: z.string().default(""),
   COOKIE_SECURE: z.stringbool().default(false),
 });
 

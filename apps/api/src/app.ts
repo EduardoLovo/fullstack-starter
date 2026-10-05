@@ -14,6 +14,7 @@ import {
 } from "fastify-type-provider-zod";
 import { env } from "./env.js";
 import { redis } from "./lib/redis.js";
+import { isTrustedProxy, startTrustedProxyRefresh } from "./lib/trusted-proxies.js";
 import { authRoutes } from "./modules/auth/auth.routes.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { usersRoutes } from "./modules/users/users.routes.js";
@@ -28,10 +29,12 @@ export async function buildApp() {
       // Log colorido em dev; JSON puro em produção (melhor para ferramentas de log).
       transport: env.NODE_ENV === "development" ? { target: "pino-pretty" } : undefined,
     },
-    // Atrás do Nginx: confia no X-Forwarded-For para saber o IP real do cliente
-    // (importante para o rate limit não tratar todo mundo como o mesmo IP).
-    trustProxy: true,
+    // Atrás do Nginx, o IP real do cliente vem no X-Forwarded-For. Só aceitamos
+    // esse cabeçalho quando a conexão vem de um proxy confiável (ver trusted-proxies.ts).
+    trustProxy: isTrustedProxy,
   }).withTypeProvider<ZodTypeProvider>();
+
+  await startTrustedProxyRefresh();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);

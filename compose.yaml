@@ -1,13 +1,35 @@
 # Ambiente de desenvolvimento.
-# O nginx (proxy reverso) entra na próxima etapa.
 #
-# Frontend: http://localhost:3000   API: http://localhost:3333/docs
+# Entrada única (Nginx): http://localhost:8080   (frontend em /, API em /api)
+# Acesso direto, para depurar: frontend :3000, API :3333/docs
 #
 # Subir tudo com hot reload:   docker compose up --watch
 
 name: fullstack-starter
 
 services:
+  nginx:
+    image: nginx:1.31-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NGINX_PORT:-8080}:80"
+    volumes:
+      # Para aplicar mudanças no arquivo sem derrubar o container:
+      #   docker compose exec nginx nginx -s reload
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - backend
+
   web:
     build:
       context: ./apps/web
@@ -59,7 +81,12 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: http://localhost:3000
-      APP_URL: http://localhost:3000
+      # Só o Nginx pode informar o IP real do cliente (X-Forwarded-For), porque ele
+      # SOBRESCREVE o cabeçalho. O proxy do Next (web) repassa o valor que o cliente
+      # mandou, então confiar nele permitiria burlar o rate limit pela porta 3000.
+      TRUSTED_PROXY_HOSTS: nginx
+      # Link do e-mail de redefinição de senha: aponta para a entrada pelo Nginx.
+      APP_URL: ${APP_URL:-http://localhost:8080}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
     ports:

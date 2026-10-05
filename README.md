@@ -29,12 +29,30 @@ docker compose exec api npm run db:seed   # cria o usuário admin
 
 | Serviço | Endereço |
 |---|---|
-| **Aplicação (frontend)** | http://localhost:3000 |
-| API | http://localhost:3333 |
-| Documentação da API (Swagger) | http://localhost:3333/docs |
+| **Aplicação (entrada pelo Nginx)** | http://localhost:8080 |
+| API pelo Nginx | http://localhost:8080/api |
+| Documentação da API (Swagger) | http://localhost:8080/api/docs |
+| Acesso direto, para depurar | frontend :3000, API :3333 |
 | Mailpit (e-mails) | http://localhost:8025 |
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
+
+## Nginx (proxy reverso)
+
+Porta única de entrada: `/` vai para o Next.js, e `/api/*` vai para a API (sem o prefixo). Para o navegador, tudo é um site só. Configuração em [nginx/default.conf](nginx/default.conf).
+
+- **Resolução dinâmica de DNS:** por padrão, o Nginx resolve o nome `api` uma vez só, quando sobe. Se a API for recriada com outro IP, ele passa a responder 502. Com `resolver 127.0.0.11` (o DNS do Docker) e `server api:3333 resolve`, ele acompanha a troca de IP sem precisar reiniciar (testado forçando um IP novo).
+- **IP real do cliente sem brecha:** o Nginx **sobrescreve** o `X-Forwarded-For`, e a API só aceita esse cabeçalho quando a conexão vem do Nginx (o IP dele é descoberto pelo DNS). Antes, com `trustProxy: true`, quem acessasse a API direto podia mandar um IP falso a cada tentativa e burlar o rate limit do login. O proxy do Next fica de fora da lista de confiança porque repassa o cabeçalho que o cliente mandou.
+- **WebSocket:** o hot reload do Next funciona através do Nginx.
+- **gzip:** os arquivos JS ficam de 4 a 6 vezes menores.
+- **Cabeçalhos de segurança:** `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, sem `Server` com versão e sem `X-Powered-By`.
+- **Limite de upload** de 5MB: acima disso o Nginx responde 413, sem a requisição chegar à API.
+- `keepalive` com os upstreams, log com tempo de resposta e healthcheck em `/nginx-health`.
+
+Para aplicar uma mudança no arquivo sem derrubar o container:
+```bash
+docker compose exec nginx nginx -s reload
+```
 
 ## Frontend
 
@@ -132,5 +150,5 @@ Os e-mails de dev aparecem no Mailpit: http://localhost:8025
 - [x] Módulo de exemplo (tarefas) com CRUD completo
 - [x] Worker: fila de e-mails com BullMQ (boas-vindas, redefinição de senha, aviso de senha alterada)
 - [x] Web: Next.js + Tailwind + shadcn/ui (login, cadastro, senha, tarefas, admin)
-- [ ] Nginx como reverse proxy
+- [x] Nginx como reverse proxy (porta única, DNS dinâmico, IP real do cliente, gzip)
 - [ ] Compose de produção (imagens prod + Nginx)
