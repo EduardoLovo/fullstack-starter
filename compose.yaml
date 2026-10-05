@@ -1,11 +1,47 @@
 # Ambiente de desenvolvimento.
-# Os serviços web e nginx entram nas próximas etapas.
+# O nginx (proxy reverso) entra na próxima etapa.
+#
+# Frontend: http://localhost:3000   API: http://localhost:3333/docs
 #
 # Subir tudo com hot reload:   docker compose up --watch
 
 name: fullstack-starter
 
 services:
+  web:
+    build:
+      context: ./apps/web
+      target: dev
+    init: true
+    restart: unless-stopped
+    environment:
+      # O navegador chama /api/* no próprio frontend, e o Next repassa
+      # para a API pelo nome do serviço na rede do Docker.
+      API_INTERNAL_URL: http://api:3333
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s # a primeira compilação do next dev demora
+      retries: 3
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/web/src
+          target: /app/src
+        - action: rebuild
+          path: ./apps/web/package.json
+        - action: sync+restart
+          path: ./apps/web/next.config.ts
+          target: /app/next.config.ts
+    networks:
+      - backend
+
   api:
     build:
       context: ./apps/api

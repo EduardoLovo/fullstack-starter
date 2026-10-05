@@ -29,11 +29,32 @@ docker compose exec api npm run db:seed   # cria o usuário admin
 
 | Serviço | Endereço |
 |---|---|
+| **Aplicação (frontend)** | http://localhost:3000 |
 | API | http://localhost:3333 |
 | Documentação da API (Swagger) | http://localhost:3333/docs |
 | Mailpit (e-mails) | http://localhost:8025 |
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
+
+## Frontend
+
+Next.js 16 (App Router), Tailwind CSS 4, shadcn/ui, React Query e React Hook Form + Zod.
+
+| Tela | O que faz |
+|---|---|
+| `/login`, `/register` | Entrar e criar conta, com validação nos campos |
+| `/forgot-password`, `/reset-password` | Recuperação de senha pelo link enviado por e-mail |
+| `/tasks` | Tarefas: criar, editar, mudar status, excluir, buscar, filtrar e paginar |
+| `/admin/users` | Só para admin: buscar usuários, trocar perfil, bloquear e desbloquear |
+
+Decisões importantes:
+- **Mesma origem:** o navegador só chama `/api/*` no próprio frontend, e o Next repassa para a API pela rede do Docker. Assim não há CORS, e o cookie do refresh token fica no domínio do site.
+- **Access token só em memória**, nunca no `localStorage`, onde um script injetado (XSS) conseguiria ler. Ao recarregar a página, a sessão volta pelo cookie `httpOnly`.
+- **Renovação automática:** uma chamada que recebe 401 renova o token e é repetida. Renovações simultâneas são unificadas numa só, porque cada refresh token só pode ser usado uma vez.
+- **Cache visível:** as listas mostram se a resposta veio do Redis ou do PostgreSQL (header `X-Cache`).
+- **Sem redirecionamento aberto:** o `?next=` do login só aceita caminhos internos.
+- Modo claro/escuro e layout responsivo.
+- **Imagem de produção** com `output: "standalone"`: leva só as dependências usadas (38MB de `node_modules`) e roda sem root.
 
 ## API
 
@@ -110,6 +131,6 @@ Os e-mails de dev aparecem no Mailpit: http://localhost:8025
 - [x] Redis: cache de respostas com invalidação por versão
 - [x] Módulo de exemplo (tarefas) com CRUD completo
 - [x] Worker: fila de e-mails com BullMQ (boas-vindas, redefinição de senha, aviso de senha alterada)
-- [ ] Web: Next.js + Tailwind + shadcn/ui
+- [x] Web: Next.js + Tailwind + shadcn/ui (login, cadastro, senha, tarefas, admin)
 - [ ] Nginx como reverse proxy
 - [ ] Compose de produção (imagens prod + Nginx)
