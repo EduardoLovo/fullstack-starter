@@ -5,6 +5,7 @@ import { pino } from "pino";
 import { EMAIL_QUEUE, type EmailJob } from "../queues/email.types.js";
 import { env } from "./env.js";
 import { mailer } from "./mailer.js";
+import { emailFailures, emailSendDuration, emailsSent, startMetricsServer } from "./metrics.js";
 import { renderEmail } from "./templates.js";
 
 // Processo separado da API: roda no container "worker", com a mesma imagem
@@ -23,6 +24,7 @@ const worker = new Worker<EmailJob>(
   EMAIL_QUEUE,
   async (job) => {
     const email = renderEmail(job.data);
+    const stopTimer = emailSendDuration.startTimer({ template: job.data.template });
     const info = await mailer.sendMail({
       from: env.MAIL_FROM,
       to: job.data.to,
@@ -30,22 +32,27 @@ const worker = new Worker<EmailJob>(
       html: email.html,
       text: email.text,
     });
+    stopTimer();
     return { messageId: info.messageId };
   },
   { connection, concurrency: env.WORKER_CONCURRENCY },
 );
 
 worker.on("ready", () => log.info(`Worker ouvindo a fila "${EMAIL_QUEUE}"`));
-worker.on("completed", (job) =>
-  log.info({ jobId: job.id, template: job.name, to: job.data.to }, "E-mail enviado"),
-);
-worker.on("failed", (job, error) =>
+worker.on("completed", (job) => {
+  emailsSent.inc({ template: job.data.template });
+  log.info({ jobId: job.id, template: job.name, to: job.data.to }, "E-mail enviado");
+});
+worker.on("failed", (job, error) => {
+  emailFailures.inc({ template: job?.data.template ?? "unknown" });
   log.warn(
     { jobId: job?.id, template: job?.name, attempt: job?.attemptsMade, error: error.message },
     "Falha ao enviar e-mail (vai tentar de novo se ainda houver tentativas)",
-  ),
-);
+  );
+});
 worker.on("error", (error) => log.error({ error: error.message }, "Erro no worker"));
+
+const metricsServer = startMetricsServer(env.METRICS_PORT);
 
 // Healthcheck sem HTTP: o worker não tem porta aberta, então a cada 10s ele
 // grava a hora num arquivo. O Docker considera o container saudável enquanto
@@ -63,6 +70,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
     log.info(`${signal} recebido, terminando jobs em andamento...`);
     clearInterval(heartbeat);
+    metricsServer.close();
     await worker.close();
     connection.disconnect();
     process.exit(0);

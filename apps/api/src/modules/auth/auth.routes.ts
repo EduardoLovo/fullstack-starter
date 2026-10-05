@@ -4,6 +4,7 @@ import type { FastifyReply } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { env } from "../../env.js";
+import { authEvents } from "../../lib/metrics.js";
 import { prisma } from "../../lib/prisma.js";
 import { enqueueEmail } from "../../queues/email.queue.js";
 import { invalidateCache } from "../../plugins/cache.js";
@@ -70,6 +71,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         select: publicUserSelect,
       });
       await invalidateCache(USERS_CACHE);
+      authEvents.inc({ event: "register" });
 
       // Se a fila falhar, o cadastro não deve falhar junto: só registra o erro.
       await enqueueEmail({ template: "welcome", to: user.email, name: user.name }).catch((error) =>
@@ -104,14 +106,17 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const passwordOk = await argon2.verify(user?.passwordHash ?? DUMMY_HASH, password);
       if (!user || !passwordOk) {
+        authEvents.inc({ event: "login_failure" });
         throw app.httpErrors.unauthorized("E-mail ou senha inválidos");
       }
       if (user.status === "BLOCKED") {
+        authEvents.inc({ event: "login_blocked_user" });
         throw app.httpErrors.forbidden("Usuário bloqueado");
       }
 
       const { passwordHash: _, ...publicUser } = user;
       const accessToken = await issueSession(reply, publicUser);
+      authEvents.inc({ event: "login_success" });
       return { accessToken, user: publicUser };
     },
   );
@@ -129,6 +134,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = token ? await consumeRefreshToken(token) : null;
       if (!userId) {
         reply.clearCookie(REFRESH_COOKIE, { path: "/" });
+        authEvents.inc({ event: "refresh_rejected" });
         throw app.httpErrors.unauthorized("Sessão expirada, faça login novamente");
       }
 
@@ -183,6 +189,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // Mesma resposta exista o e-mail ou não: a rota não pode servir para
       // descobrir quem tem conta. 202 = "aceito, vai ser processado".
+      authEvents.inc({ event: "password_reset_requested" });
       return reply.status(202).send({
         message: "Se o e-mail estiver cadastrado, você vai receber um link para redefinir a senha.",
       });
@@ -212,6 +219,8 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { passwordHash: await argon2.hash(password) },
         select: { id: true, name: true, email: true },
       });
+
+      authEvents.inc({ event: "password_reset_completed" });
 
       // Senha nova = todas as sessões antigas caem (inclusive a de quem
       // eventualmente roubou a senha anterior).

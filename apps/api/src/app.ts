@@ -21,6 +21,7 @@ import { usersRoutes } from "./modules/users/users.routes.js";
 import { tasksRoutes } from "./modules/tasks/tasks.routes.js";
 import authPlugin from "./plugins/auth.js";
 import cachePlugin from "./plugins/cache.js";
+import metricsPlugin from "./plugins/metrics.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -38,6 +39,18 @@ export async function buildApp() {
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+
+  // Muitos clientes HTTP mandam "Content-Type: application/json" mesmo sem corpo
+  // (ex.: num DELETE), e o Fastify responderia 400. Aceitamos corpo vazio, mas
+  // o resto continua passando pelo parser padrão, que barra JSON malformado e
+  // ataques de "prototype poisoning" (chaves __proto__ e constructor).
+  const parseJson = app.getDefaultJsonParser("error", "error");
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+    const text = body.toString(); // parseAs: "string" já entrega texto; isto só satisfaz o tipo
+    if (text === "") return done(null, undefined);
+    parseJson(request, text, done);
+  });
 
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(cors, { origin: env.CORS_ORIGIN.split(","), credentials: true });
@@ -71,6 +84,7 @@ export async function buildApp() {
   await app.register(swaggerUi, { routePrefix: "/docs" });
 
   await app.register(authPlugin);
+  await app.register(metricsPlugin);
   await app.register(cachePlugin);
 
   await app.register(healthRoutes);

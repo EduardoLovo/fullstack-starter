@@ -1,0 +1,121 @@
+# Monitoramento: Prometheus + Grafana + exporters (+ k6 para gerar tráfego).
+# Não sobe sozinho: é somado ao compose da aplicação com um segundo -f.
+#
+#   Dev:       docker compose -f compose.yaml -f compose.monitoring.yaml up -d
+#   Produção:  docker compose -f compose.prod.yaml -f compose.monitoring.yaml --env-file .env.prod up -d
+#
+#   Grafana:    http://localhost:3001   (admin / senha em GRAFANA_ADMIN_PASSWORD, padrão "admin")
+#   Prometheus: http://localhost:9090   (alertas em /alerts)
+#
+#   Gerar tráfego por 5 minutos (o dashboard ganha vida):
+#   docker compose -f compose.yaml -f compose.monitoring.yaml run --rm k6
+
+x-monitoring: &monitoring
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  prometheus:
+    <<: *monitoring
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d # guarda 7 dias de histórico
+      - --web.enable-lifecycle # permite recarregar a config: curl -X POST localhost:9090/-/reload
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [backend, monitoring]
+
+  grafana:
+    <<: *monitoring
+    image: grafana/grafana:13.2.3
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/fullstack-starter.json
+      # O Grafana é escrito em Go, que ocupa memória livre enquanto não sente pressão
+      # (passava de 1,2GB). GOMEMLIMIT faz o coletor de lixo trabalhar para ficar
+      # abaixo do teto, e o limite do container garante que ele não passe disso.
+      GOMEMLIMIT: 400MiB
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    deploy:
+      resources:
+        limits: { memory: 768M }
+    depends_on: [prometheus]
+    networks: [monitoring]
+
+  # ---- Exporters ----
+
+  postgres-exporter:
+    <<: *monitoring
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    networks: [backend]
+
+  redis-exporter:
+    <<: *monitoring
+    image: oliver006/redis_exporter:v1.93.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [backend]
+
+  nginx-exporter:
+    <<: *monitoring
+    image: nginx/nginx-prometheus-exporter:1.5.3
+    command: ["--nginx.scrape-uri=http://nginx:8081/stub_status"]
+    networks: [backend]
+
+  # CPU, memória e rede de cada container. Precisa ler o sistema do host do
+  # Docker (no Windows/Mac, a máquina virtual do Docker Desktop).
+  cadvisor:
+    <<: *monitoring
+    image: ghcr.io/google/cadvisor:v0.60.6
+    privileged: true
+    devices: [/dev/kmsg]
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [backend]
+
+  # ---- Gerador de tráfego (só sobe com "run") ----
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [load]
+    command: ["run", "/scripts/traffic.js"]
+    environment:
+      BASE_URL: http://nginx/api
+    volumes:
+      - ./monitoring/k6:/scripts:ro
+    networks: [backend]
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  # Rede própria para publicar as portas do Grafana e do Prometheus
+  # (em produção a "backend" é interna e não permite publicar portas).
+  monitoring:

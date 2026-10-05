@@ -33,6 +33,34 @@ describe("CRUD de tarefas", () => {
     expect((await tasks.get(task.id)).statusCode).toBe(404);
   });
 
+  // Muitos clientes HTTP mandam "Content-Type: application/json" mesmo sem corpo
+  // (o k6 do monitoramento fazia isso, e o dashboard mostrou os 400).
+  it("aceita DELETE com Content-Type JSON e corpo vazio", async () => {
+    const user = await createUser(getApp());
+    const tasks = api(user);
+    const { id } = (await tasks.create({ title: "apagar" })).json();
+
+    const response = await getApp().inject({
+      method: "DELETE",
+      url: `/tasks/${id}`,
+      remoteAddress: user.ip,
+      headers: { ...bearer(user.accessToken), "content-type": "application/json" },
+    });
+    expect(response.statusCode).toBe(204);
+  });
+
+  it("continua recusando JSON malformado", async () => {
+    const user = await createUser(getApp());
+    const response = await getApp().inject({
+      method: "POST",
+      url: "/tasks",
+      remoteAddress: user.ip,
+      headers: { ...bearer(user.accessToken), "content-type": "application/json" },
+      payload: "{titulo quebrado",
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it("valida os dados de entrada", async () => {
     const tasks = api(await createUser(getApp()));
     expect((await tasks.create({ title: "" })).statusCode).toBe(400);

@@ -1,0 +1,14 @@
+# "Provisioning": o Grafana lê estes arquivos ao subir e já nasce configurado,
+# sem cliques na interface. Tudo fica versionado no git.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus # id fixo: o dashboard referencia a fonte de dados por ele
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s # igual ao scrape_interval do Prometheus

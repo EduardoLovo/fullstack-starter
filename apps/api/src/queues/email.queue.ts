@@ -10,8 +10,11 @@ import { EMAIL_QUEUE, type EmailJob } from "./email.types.js";
 export const emailQueue = new Queue<EmailJob>(EMAIL_QUEUE, {
   connection: new Redis(env.REDIS_URL, { enableOfflineQueue: false }),
   defaultJobOptions: {
-    attempts: 5, // tenta até 5 vezes se o envio falhar...
-    backoff: { type: "exponential", delay: 5_000 }, // ...esperando 5s, 10s, 20s, 40s
+    // Com 5 tentativas a partir de 5s, o worker desistia depois de ~75s: uma
+    // queda curta do SMTP já perdia e-mails (visto no dashboard). Com 9 tentativas,
+    // a espera dobra a cada falha (5s, 10s, 20s... ~21min) e cobre quedas de ~40min.
+    attempts: 9,
+    backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: { age: 24 * 60 * 60, count: 1000 }, // guarda os concluídos por 1 dia
     removeOnFail: { age: 7 * 24 * 60 * 60 }, // e os que falharam por 7 dias, para investigar
   },

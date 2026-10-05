@@ -15,6 +15,9 @@ const envSchema = z.object({
   SMTP_PASS: z.string().optional(),
   MAIL_FROM: z.string().default("Fullstack Starter <no-reply@starter.dev>"),
 
+  // Porta interna onde o Prometheus lê as métricas do worker.
+  METRICS_PORT: z.coerce.number().default(9464),
+
   // Quantos e-mails o worker envia ao mesmo tempo.
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(5),
 });

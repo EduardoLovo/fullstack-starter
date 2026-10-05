@@ -111,6 +111,20 @@ jobs:
           -v "$PWD/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"
           nginx:1.31-alpine nginx -t
 
+      - name: Valida o compose de monitoramento (somado ao de dev e ao de produção)
+        run: |
+          docker compose -f compose.yaml -f compose.monitoring.yaml config --quiet
+          docker compose -f compose.prod.yaml -f compose.monitoring.yaml --env-file .env.prod.example config --quiet
+
+      - name: Valida Prometheus e regras de alerta (promtool)
+        run: >-
+          docker run --rm --entrypoint promtool
+          -v "$PWD/monitoring/prometheus:/etc/prometheus:ro"
+          prom/prometheus:v3.15.0 check config /etc/prometheus/prometheus.yml
+
+      - name: Valida o JSON do dashboard do Grafana
+        run: jq empty monitoring/grafana/dashboards/*.json
+
   images:
     name: Imagem ${{ matrix.name }}
     needs: [api, web, infra]

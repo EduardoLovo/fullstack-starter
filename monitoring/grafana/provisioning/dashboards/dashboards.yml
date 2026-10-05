@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: fullstack-starter
+    folder: Fullstack Starter
+    type: file
+    allowUiUpdates: false # o dashboard "oficial" é o do arquivo JSON no git
+    options:
+      path: /var/lib/grafana/dashboards

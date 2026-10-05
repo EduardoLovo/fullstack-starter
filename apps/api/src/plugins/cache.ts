@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { cacheRequests } from "../lib/metrics.js";
 import { keys, redis } from "../lib/redis.js";
 
 // Cache de respostas no Redis (padrão "cache-aside"), declarado na rota:
@@ -52,10 +53,16 @@ export default fp(async (app) => {
       const urlHash = createHash("sha1").update(request.url).digest("hex");
       const cacheKey = keys.cacheEntry(namespace, version, urlHash);
 
+      // Só a primeira parte do namespace ("tasks", "users") vira label:
+      // o id do usuário criaria uma série nova no Prometheus por usuário.
+      const resource = namespace.split(":")[0]!;
+
       const cached = await redis.get(cacheKey);
       if (cached) {
+        cacheRequests.inc({ resource, result: "hit" });
         return reply.header("x-cache", "HIT").type("application/json; charset=utf-8").send(cached);
       }
+      cacheRequests.inc({ resource, result: "miss" });
       request.cacheKey = cacheKey;
     } catch (error) {
       // Redis fora: segue sem cache (fail-open), direto no banco.

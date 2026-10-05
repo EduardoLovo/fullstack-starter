@@ -1,0 +1,54 @@
+# O Prometheus "puxa" (scrape) as métricas de cada alvo a cada 15s
+# e guarda como séries temporais.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s # frequência de avaliação das regras de alerta
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # A aplicação. dns_sd_configs consulta o DNS do Docker e encontra TODAS as
+  # réplicas do serviço: com "--scale worker=3", os 3 workers são lidos sem
+  # mudar nada aqui (um static_config pegaria só um deles).
+  - job_name: api
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 3333
+        refresh_interval: 15s
+
+  - job_name: worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9464
+        refresh_interval: 15s
+
+  # Exporters: traduzem as estatísticas de cada serviço para o formato do Prometheus.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: nginx
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+
+  # CPU, memória e rede de cada container.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # O cAdvisor gera milhares de séries que não usamos: guarda só as do dashboard.
+      - source_labels: [__name__]
+        regex: "container_(cpu_usage_seconds_total|memory_working_set_bytes|spec_memory_limit_bytes|network_receive_bytes_total|network_transmit_bytes_total|last_seen)"
+        action: keep
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

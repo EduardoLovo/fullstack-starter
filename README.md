@@ -39,6 +39,45 @@ docker compose exec api npm run db:seed   # cria o usuário admin
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
 
+## Monitoramento
+
+![Dashboard do Grafana](docs/dashboard.png)
+
+Prometheus + Grafana + exporters, num compose à parte ([compose.monitoring.yaml](compose.monitoring.yaml)) que se soma ao de dev ou ao de produção:
+
+```bash
+docker compose -f compose.yaml -f compose.monitoring.yaml up -d
+```
+
+| | Endereço |
+|---|---|
+| Grafana (dashboard já configurado) | http://localhost:3001 (admin / admin em dev) |
+| Prometheus (consultas e alertas) | http://localhost:9090/alerts |
+
+Para gerar tráfego simulado por 5 minutos com o **k6** (o dashboard ganha vida):
+```bash
+docker compose -f compose.yaml -f compose.monitoring.yaml run --rm k6
+```
+
+**O que é medido:**
+- **API** (`prom-client`): requisições e latência por rota (p50/p95/p99), respostas por status (com 429 do rate limit), eventos de autenticação, acertos no cache e tamanho da fila de e-mails.
+- **Worker:** e-mails enviados, falhas e tempo de entrega ao SMTP.
+- **Infraestrutura:** CPU e memória por container (cAdvisor), PostgreSQL, Redis e Nginx (um *exporter* para cada).
+
+**Detalhes de implementação:**
+- **Baixa cardinalidade:** as labels usam o modelo da rota (`/tasks/:id`), nunca ids. Assim o Prometheus não cria uma série nova por tarefa ou por usuário (há teste garantindo isso).
+- **Descoberta de réplicas:** o Prometheus encontra as instâncias pelo DNS do Docker. Com `--scale worker=3`, os 3 workers são monitorados sem mudar nada.
+- **Métricas privadas:** o Nginx responde 404 para `/api/metrics`. O Prometheus lê direto pela rede interna, e o `stub_status` do Nginx fica numa porta que nunca é publicada.
+- **Tudo como código:** a fonte de dados e o dashboard do Grafana são provisionados por arquivo (o JSON do dashboard está no git), e a configuração é validada no CI com `promtool`.
+
+**10 regras de alerta** ([alerts.yml](monitoring/prometheus/alerts.yml)): serviço fora do ar, taxa de erros, latência, possível força bruta no login, fila acumulando, falhas no envio, e-mails perdidos, memória dos containers, Postgres e Redis.
+
+**O que o monitoramento revelou** (e já foi corrigido):
+1. **E-mails perdidos numa queda curta do SMTP.** Com 5 tentativas a partir de 5s, o worker desistia depois de ~75s, e o alerta `EmailsPerdidos` disparou ao derrubar o Mailpit. Agora são 9 tentativas, que cobrem quedas de ~40 minutos.
+2. **`DELETE` recusado com 400.** O painel de status mostrou 13 erros 400 vindos do k6: clientes que mandam `Content-Type: application/json` sem corpo eram rejeitados. A API agora aceita corpo vazio e continua barrando JSON malformado e *prototype poisoning* (com testes para os três casos).
+3. **Dev x produção:** a API em dev usa ~200MB de memória (TypeScript compilado em tempo real); a imagem de produção, ~70MB.
+4. **O próprio Grafana era o maior consumidor de memória** (~1,3GB, mais que a aplicação inteira). Por ser escrito em Go, ele ocupa memória livre enquanto não sente pressão. Com `GOMEMLIMIT` e um limite no container, caiu para ~270MB em repouso e ~470MB renderizando o dashboard.
+
 ## Testes
 
 Testes de integração da API com Vitest, contra **PostgreSQL e Redis reais**, num banco separado (`starter_test`). O banco é criado e migrado automaticamente.
@@ -48,7 +87,7 @@ cd apps/api
 npm test
 ```
 
-Os 24 testes cobrem: cadastro, login, rate limit, tentativa de burlar o rate limit com `X-Forwarded-For` falso, rotação e reuso de refresh token, logout, recuperação de senha completa, permissões de admin, bloqueio de usuário, CRUD de tarefas, isolamento entre usuários e o cache (HIT, MISS e invalidação).
+Os 27 testes cobrem: cadastro, login, rate limit, tentativa de burlar o rate limit com `X-Forwarded-For` falso, rotação e reuso de refresh token, logout, recuperação de senha completa, permissões de admin, bloqueio de usuário, CRUD de tarefas, isolamento entre usuários, o cache (HIT, MISS e invalidação) e as métricas do Prometheus.
 
 ## CI/CD
 
@@ -221,3 +260,4 @@ Os e-mails de dev aparecem no Mailpit: http://localhost:8025
 - [x] Compose de produção (só o Nginx exposto, containers endurecidos, migrations em serviço próprio)
 - [x] Testes de integração da API (Vitest + Postgres e Redis reais)
 - [x] CI/CD com GitHub Actions: testes, build, scan com Trivy e publicação no GHCR
+- [x] Monitoramento: Prometheus, Grafana, exporters, alertas e k6

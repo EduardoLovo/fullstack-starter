@@ -1,0 +1,92 @@
+# Regras de alerta. O Prometheus avalia a cada 15s; um alerta só "dispara"
+# (firing) quando a condição se mantém pelo tempo do "for", o que evita
+# alarme por um pico de 1 segundo. Veja em http://localhost:9090/alerts
+
+groups:
+  - name: disponibilidade
+    rules:
+      - alert: ServicoFora
+        expr: up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} ({{ $labels.instance }}) não responde"
+          description: "O Prometheus não consegue ler as métricas há mais de 1 minuto."
+
+  - name: api
+    rules:
+      - alert: TaxaDeErrosAlta
+        expr: |
+          sum(rate(http_request_duration_seconds_count{status_code=~"5.."}[5m]))
+            / sum(rate(http_request_duration_seconds_count[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Mais de 5% das requisições estão falhando (5xx)"
+
+      - alert: LatenciaAlta
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 da API acima de 500ms"
+          description: "5% das requisições estão levando mais de {{ $value | humanizeDuration }}."
+
+      - alert: PossivelForcaBruta
+        expr: sum(rate(auth_events_total{event="login_failure"}[5m])) * 60 > 20
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Mais de 20 logins com senha errada por minuto"
+
+  - name: emails
+    rules:
+      - alert: FilaDeEmailsAcumulando
+        expr: email_queue_jobs{state="waiting"} > 50
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} e-mails esperando na fila"
+          description: "O worker está parado ou não dá conta. Veja se precisa escalar: --scale worker=N"
+
+      # Um job só vai para "failed" depois de esgotar TODAS as tentativas:
+      # é um e-mail que não foi entregue (ex.: link de redefinição de senha).
+      - alert: EmailsPerdidos
+        expr: delta(email_queue_jobs{state="failed"}[10m]) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "E-mails descartados depois de esgotar as tentativas"
+          description: "Corrija o SMTP e reenvie os jobs com falha (eles ficam guardados por 7 dias)."
+
+      - alert: FalhasNoEnvioDeEmails
+        expr: sum(increase(email_send_failures_total[10m])) > 5
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Envio de e-mails falhando (SMTP fora do ar?)"
+
+  - name: infraestrutura
+    rules:
+      - alert: ContainerPertoDoLimiteDeMemoria
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+            / (container_spec_memory_limit_bytes{name!=""} > 0) > 0.9
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.name }} usando mais de 90% do limite de memória"
+
+      - alert: PostgresForaDoAr
+        expr: pg_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "O exporter não consegue conectar no PostgreSQL"
+
+      - alert: RedisForaDoAr
+        expr: redis_up == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "O exporter não consegue conectar no Redis"
