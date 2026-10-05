@@ -5,7 +5,7 @@
 #                └─ build ─ prod (servidor standalone, sem node_modules completo)
 # ============================================================
 
-FROM node:24-slim AS base
+FROM node:24-alpine AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -33,8 +33,12 @@ RUN npm run build
 # ---- Imagem final ----
 # Com output: "standalone", o Next gera um server.js com APENAS as dependências
 # que o app realmente usa. A imagem não leva o node_modules inteiro (~500MB+).
-FROM node:24-slim AS prod
+FROM node:24-alpine AS prod
 WORKDIR /app
+# Em produção o container só executa "node": npm, yarn e corepack não são
+# usados e trazem dependências próprias com vulnerabilidades (apontadas pelo Trivy).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \

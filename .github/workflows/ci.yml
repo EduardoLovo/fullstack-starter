@@ -1,0 +1,222 @@
+# Pipeline de CI/CD
+#
+#   push / pull request ─┬─ api      typecheck, testes (Postgres + Redis reais), build
+#                        ├─ web      typecheck e build do Next.js
+#                        ├─ infra    valida os arquivos compose e a config do Nginx
+#                        └─ images   (depois dos três acima) build das imagens Docker,
+#                                    scan de vulnerabilidades (Trivy) e, só na main,
+#                                    publicação no GitHub Container Registry (ghcr.io)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # permite rodar manualmente pela aba Actions
+
+# Um push novo na mesma branch cancela a execução anterior, que ficou obsoleta.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API (testes)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+
+    # Containers que o GitHub sobe ao lado do job, como no docker compose.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: starter
+          POSTGRES_PASSWORD: starter
+          POSTGRES_DB: starter
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U starter"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://starter:starter@localhost:5432/starter_test
+      TEST_REDIS_URL: redis://localhost:6379/1
+      # O prisma.config.ts exige DATABASE_URL até para o "prisma generate"
+      # (que não conecta no banco). No CI não existe .env, então definimos aqui.
+      DATABASE_URL: postgresql://starter:starter@localhost:5432/starter_test
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  web:
+    name: Web (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+  infra:
+    name: Compose e Nginx
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Valida compose.yaml (dev)
+        run: cp .env.example .env && docker compose -f compose.yaml config --quiet
+
+      - name: Valida compose.prod.yaml
+        run: docker compose -f compose.prod.yaml --env-file .env.prod.example config --quiet
+
+      - name: Valida a configuração do Nginx
+        run: >-
+          docker run --rm
+          -v "$PWD/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"
+          nginx:1.31-alpine nginx -t
+
+  images:
+    name: Imagem ${{ matrix.name }}
+    needs: [api, web, infra]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # publicar no ghcr.io
+      security-events: write # enviar o relatório do Trivy para a aba Security
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: apps/api
+            target: prod
+          - name: migrate
+            context: apps/api
+            target: migrate
+          - name: web
+            context: apps/web
+            target: prod
+
+    env:
+      # Só publica imagens a partir de push na main (não em pull requests).
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # ghcr.io/<dono>/<repositório>-<imagem>, tudo em minúsculas (exigência do registry).
+      - name: Nome da imagem
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # 1º build: carrega a imagem localmente para o Trivy analisar.
+      # O cache do GitHub Actions (type=gha) reaproveita as camadas entre execuções.
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          load: true
+          tags: ${{ steps.image.outputs.name }}:scan
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+      # Falha o pipeline se houver vulnerabilidade CRÍTICA que já tenha correção
+      # disponível (ignore-unfixed): esse é o tipo que dá para resolver atualizando.
+      - name: Scan de vulnerabilidades (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}:scan
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # Relatório completo (HIGH e CRITICAL) na aba Security do GitHub, sem falhar o build.
+      - name: Relatório do Trivy (SARIF)
+        if: always() && env.PUBLISH == 'true'
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}:scan
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-${{ matrix.name }}.sarif
+          skip-setup-trivy: true
+
+      # A aba Security só aceita relatórios em repositório público (ou com o
+      # GitHub Advanced Security). Em repositório privado, só pula este passo.
+      - name: Envia relatório para a aba Security
+        if: always() && env.PUBLISH == 'true'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-${{ matrix.name }}.sarif
+          category: trivy-${{ matrix.name }}
+
+      - name: Login no GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2º build: sai inteiro do cache (segundos) e publica com as tags finais.
+      - name: Publica a imagem
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}

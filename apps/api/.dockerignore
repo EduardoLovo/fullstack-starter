@@ -9,3 +9,7 @@ src/generated
 *.log
 Dockerfile
 .dockerignore
+# Testes e configs de checagem não entram na imagem
+tests
+vitest.config.ts
+tsconfig.check.json

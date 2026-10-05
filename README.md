@@ -1,5 +1,7 @@
 # Fullstack Starter
 
+[![CI](https://github.com/EduardoLovo/fullstack-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/EduardoLovo/fullstack-starter/actions/workflows/ci.yml)
+
 Base reutilizável para projetos full-stack, 100% containerizada.
 
 **Stack:** Next.js · Fastify · Prisma · PostgreSQL · Redis · BullMQ · Nginx · Docker Compose
@@ -36,6 +38,38 @@ docker compose exec api npm run db:seed   # cria o usuário admin
 | Mailpit (e-mails) | http://localhost:8025 |
 | PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
+
+## Testes
+
+Testes de integração da API com Vitest, contra **PostgreSQL e Redis reais**, num banco separado (`starter_test`). O banco é criado e migrado automaticamente.
+
+```bash
+cd apps/api
+npm test
+```
+
+Os 24 testes cobrem: cadastro, login, rate limit, tentativa de burlar o rate limit com `X-Forwarded-For` falso, rotação e reuso de refresh token, logout, recuperação de senha completa, permissões de admin, bloqueio de usuário, CRUD de tarefas, isolamento entre usuários e o cache (HIT, MISS e invalidação).
+
+## CI/CD
+
+Pipeline no GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)), a cada push e pull request:
+
+| Job | O que faz |
+|---|---|
+| **API** | typecheck, testes (com Postgres e Redis como *services*) e build |
+| **Web** | typecheck e build do Next.js |
+| **Compose e Nginx** | valida os dois arquivos compose e a configuração do Nginx (`nginx -t`) |
+| **Imagens** | build das imagens `api`, `migrate` e `web` (com cache entre execuções), scan com **Trivy** e, na `main`, publicação no **GitHub Container Registry** |
+
+O Trivy **reprova o pipeline** se houver vulnerabilidade crítica que já tenha correção. O relatório completo vai para a aba *Security* do repositório.
+
+O que o scan mudou no projeto:
+- A imagem base `node:24-slim` (Debian 12) tinha 3 vulnerabilidades críticas no sistema operacional. Trocar por `node:24-alpine` zerou as críticas e deixou a imagem cerca de 90MB menor.
+- As vulnerabilidades altas restantes estavam no **npm que vem na imagem base**, que a produção nem usa. Remover npm, yarn e corepack das imagens finais zerou as altas.
+
+Resultado: as imagens de produção da API e do frontend têm **0 vulnerabilidades críticas e 0 altas** com correção disponível.
+
+As imagens publicadas ficam em `ghcr.io/<usuário>/<repositório>-api`, `-migrate` e `-web`, com as tags `latest` e o hash curto do commit.
 
 ## Produção
 
@@ -185,3 +219,5 @@ Os e-mails de dev aparecem no Mailpit: http://localhost:8025
 - [x] Web: Next.js + Tailwind + shadcn/ui (login, cadastro, senha, tarefas, admin)
 - [x] Nginx como reverse proxy (porta única, DNS dinâmico, IP real do cliente, gzip)
 - [x] Compose de produção (só o Nginx exposto, containers endurecidos, migrations em serviço próprio)
+- [x] Testes de integração da API (Vitest + Postgres e Redis reais)
+- [x] CI/CD com GitHub Actions: testes, build, scan com Trivy e publicação no GHCR

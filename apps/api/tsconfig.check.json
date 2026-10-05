@@ -1,0 +1,10 @@
+{
+  // Só para checagem de tipos (CI): inclui testes, seed e configs, que ficam
+  // fora do build de produção (tsconfig.json compila apenas src/).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "tests", "prisma", "vitest.config.ts", "prisma.config.ts"]
+}

@@ -11,13 +11,13 @@
 #         └─ prod-deps ───────┴─ prod (imagem final)
 # ============================================================
 
-FROM node:24-slim AS base
+# Alpine: imagem menor e, no scan do Trivy, sem as vulnerabilidades críticas
+# que a node:24-slim (Debian 12) trazia no sistema operacional.
+FROM node:24-alpine AS base
 WORKDIR /app
-# O CLI do Prisma (migrations) precisa do OpenSSL, que a imagem slim não traz.
+# O CLI do Prisma (migrations) precisa do OpenSSL.
 # A imagem final (prod) não usa o CLI, então não precisa dele.
-RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends openssl \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache openssl
 # Valor só para o `prisma generate` funcionar no build; não é usado em runtime.
 ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
 
@@ -69,9 +69,13 @@ RUN --mount=type=cache,target=/root/.npm \
 
 
 # ---- Imagem final ----
-FROM node:24-slim AS prod
+FROM node:24-alpine AS prod
 WORKDIR /app
 ENV NODE_ENV=production
+# Em produção o container só executa "node": npm, yarn e corepack não são
+# usados e trazem dependências próprias com vulnerabilidades (apontadas pelo Trivy).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
