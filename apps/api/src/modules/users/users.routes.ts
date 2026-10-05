@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../../lib/prisma.js";
+import { invalidateCache } from "../../plugins/cache.js";
 import { revokeAllSessions } from "../auth/token-store.js";
 import {
   listUsersQuerySchema,
@@ -9,6 +10,8 @@ import {
   publicUserSelect,
   updateUserBodySchema,
 } from "./users.schemas.js";
+
+export const USERS_CACHE = "users";
 
 export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get(
@@ -39,6 +42,9 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
     "/",
     {
       onRequest: [app.requireRole("ADMIN")],
+      // Lista compartilhada entre admins: um namespace só, invalidado quando
+      // alguém se cadastra ou um admin edita um usuário.
+      config: { cache: { namespace: () => USERS_CACHE, ttlSeconds: 30 } },
       schema: {
         tags: ["users (admin)"],
         security: [{ bearerAuth: [] }],
@@ -111,6 +117,7 @@ export const usersRoutes: FastifyPluginAsyncZod = async (app) => {
       // Bloqueou ou mudou o perfil: derruba as sessões para valer na hora
       // (o usuário precisa logar de novo e recebe um token com o perfil novo).
       await revokeAllSessions(id);
+      await invalidateCache(USERS_CACHE);
 
       return user;
     },

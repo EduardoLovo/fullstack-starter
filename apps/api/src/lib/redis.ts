@@ -19,4 +19,7 @@ export const keys = {
   revokedAccessToken: (jti: string) => `denylist:${jti}`,
   passwordReset: (tokenHash: string) => `pwreset:${tokenHash}`,
   userPasswordReset: (userId: string) => `pwreset-user:${userId}`,
+  cacheVersion: (namespace: string) => `cache-version:${namespace}`,
+  cacheEntry: (namespace: string, version: string, urlHash: string) =>
+    `cache:${namespace}:v${version}:${urlHash}`,
 };

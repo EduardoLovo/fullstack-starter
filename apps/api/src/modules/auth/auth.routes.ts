@@ -6,6 +6,8 @@ import { z } from "zod";
 import { env } from "../../env.js";
 import { prisma } from "../../lib/prisma.js";
 import { enqueueEmail } from "../../queues/email.queue.js";
+import { invalidateCache } from "../../plugins/cache.js";
+import { USERS_CACHE } from "../users/users.routes.js";
 import { publicUserSelect } from "../users/users.schemas.js";
 import {
   authResponseSchema,
@@ -67,6 +69,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         data: { name, email, passwordHash: await argon2.hash(password) },
         select: publicUserSelect,
       });
+      await invalidateCache(USERS_CACHE);
 
       // Se a fila falhar, o cadastro não deve falhar junto: só registra o erro.
       await enqueueEmail({ template: "welcome", to: user.email, name: user.name }).catch((error) =>
