@@ -1,0 +1,11 @@
+# Arquivos que NÃO entram no contexto de build da imagem.
+# node_modules do Windows não servem no Linux, e o .env não deve ir para a imagem.
+node_modules
+dist
+src/generated
+.env
+.env.*
+!.env.example
+*.log
+Dockerfile
+.dockerignore

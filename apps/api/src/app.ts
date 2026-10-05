@@ -1,0 +1,75 @@
+import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
+import sensible from "@fastify/sensible";
+import swagger from "@fastify/swagger";
+import swaggerUi from "@fastify/swagger-ui";
+import Fastify from "fastify";
+import {
+  jsonSchemaTransform,
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from "fastify-type-provider-zod";
+import { env } from "./env.js";
+import { redis } from "./lib/redis.js";
+import { authRoutes } from "./modules/auth/auth.routes.js";
+import { healthRoutes } from "./modules/health/health.routes.js";
+import { usersRoutes } from "./modules/users/users.routes.js";
+import authPlugin from "./plugins/auth.js";
+
+export async function buildApp() {
+  const app = Fastify({
+    logger: {
+      level: env.LOG_LEVEL,
+      // Log colorido em dev; JSON puro em produção (melhor para ferramentas de log).
+      transport: env.NODE_ENV === "development" ? { target: "pino-pretty" } : undefined,
+    },
+    // Atrás do Nginx: confia no X-Forwarded-For para saber o IP real do cliente
+    // (importante para o rate limit não tratar todo mundo como o mesmo IP).
+    trustProxy: true,
+  }).withTypeProvider<ZodTypeProvider>();
+
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+
+  await app.register(helmet, { contentSecurityPolicy: false });
+  await app.register(cors, { origin: env.CORS_ORIGIN.split(","), credentials: true });
+  await app.register(cookie);
+  await app.register(sensible);
+
+  // Contadores do rate limit ficam no Redis: funciona mesmo com várias
+  // réplicas da API rodando ao mesmo tempo.
+  await app.register(rateLimit, {
+    global: true,
+    max: 100,
+    timeWindow: "1 minute",
+    redis,
+    nameSpace: "ratelimit:",
+    // Se o Redis cair, a API continua respondendo (só sem rate limit)
+    // em vez de derrubar todas as rotas junto.
+    skipOnError: true,
+  });
+
+  await app.register(swagger, {
+    openapi: {
+      info: { title: "Fullstack Starter API", version: "0.1.0" },
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+        },
+      },
+    },
+    transform: jsonSchemaTransform,
+  });
+  await app.register(swaggerUi, { routePrefix: "/docs" });
+
+  await app.register(authPlugin);
+
+  await app.register(healthRoutes);
+  await app.register(authRoutes, { prefix: "/auth" });
+  await app.register(usersRoutes, { prefix: "/users" });
+
+  return app;
+}
